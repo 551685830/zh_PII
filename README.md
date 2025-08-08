@@ -12,6 +12,15 @@
   $ python3 -m spacy download xx_ent_wiki_sm
   $ python3 start_app.py
   ```
+
+> 修复正的命令
+
+```shell
+$ python -m spacy download zh_core_web_sm
+$ python -m spacy download en_core_web_lg
+$ python -m spacy download xx_ent_wiki_sm
+```
+
   *optional*
   ```shell
   $ cp .env_copy .env

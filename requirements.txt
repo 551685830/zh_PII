@@ -5,5 +5,5 @@ loguru
 fastapi
 uvicorn
 python-dotenv
-tiktoken
-math
+tiktoken==0.3.3
+# math

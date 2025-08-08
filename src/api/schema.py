@@ -6,8 +6,9 @@
 
 
 from typing import List, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from enum import Enum
+from typing import Dict, List, Optional
 
 
 class Lang(str, Enum):
@@ -72,3 +73,18 @@ class AnonymizeModel(BaseModel):
     analyzer_results: List[AnalyzeResult]
     llm_synthesize: Optional[bool] = False
     operators: Optional[List[OperatorConf]] = None
+
+# 在 schema.py 中添加以下模型定义
+
+class FileAnalyzeModel(BaseModel):
+    text: str
+    lang: Lang
+    entity_mapping: Dict[str, str] = Field(
+        ...,
+        example={"PERSON": "[姓名]", "ID_CARD": "[证件号码]"},
+        description="实体类型与替换方案的映射"
+    )
+    allow_list: Optional[List[str]] = None
+    with_anonymize: bool = Field(True, description="是否执行脱敏操作")
+    llm_synthesize: bool = Field(False, description="是否使用LLM生成假数据")
+    anonymize_operators: Optional[List[OperatorConf]] = None

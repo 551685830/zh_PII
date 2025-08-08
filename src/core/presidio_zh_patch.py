@@ -34,7 +34,18 @@ from typing import List, Optional
 
 import regex as re
 
-from .new_recognizer import IDCardRecognizer
+from .new_recognizer import (
+    IDCardRecognizer,
+    BirthDateRecognizer,
+    HouseholdAddressRecognizer,
+    ResidentialAddressRecognizer,
+    MailingAddressRecognizer,
+    HomeAddressRecognizer,
+    CompanyNameRecognizer,
+    CompanyAddressRecognizer,
+    SalaryAmountRecognizer
+)
+#from .new_recognizer import IDCardRecognizer
 
 
 class OptimizeRecognizerRegistry(RecognizerRegistry):
@@ -76,7 +87,16 @@ class OptimizeRecognizerRegistry(RecognizerRegistry):
                 IpRecognizer,
                 MedicalLicenseRecognizer,
                 nlp_recognizer,
-                UrlRecognizer
+                UrlRecognizer,
+                # 新增自定义Recognizer
+                BirthDateRecognizer,
+                HouseholdAddressRecognizer,
+                ResidentialAddressRecognizer,
+                MailingAddressRecognizer,
+                HomeAddressRecognizer,
+                CompanyNameRecognizer,
+                CompanyAddressRecognizer,
+                SalaryAmountRecognizer
             ],
         }
         for lang in languages:

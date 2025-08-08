@@ -43,7 +43,8 @@ from .new_recognizer import (
     HomeAddressRecognizer,
     CompanyNameRecognizer,
     CompanyAddressRecognizer,
-    SalaryAmountRecognizer
+    SalaryAmountRecognizer,
+    BankCardRecognizer
 )
 #from .new_recognizer import IDCardRecognizer
 
@@ -96,7 +97,8 @@ class OptimizeRecognizerRegistry(RecognizerRegistry):
                 HomeAddressRecognizer,
                 CompanyNameRecognizer,
                 CompanyAddressRecognizer,
-                SalaryAmountRecognizer
+                SalaryAmountRecognizer,
+                BankCardRecognizer
             ],
         }
         for lang in languages:

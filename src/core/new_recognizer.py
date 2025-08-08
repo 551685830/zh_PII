@@ -348,18 +348,20 @@ class MailingAddressRecognizer(PatchPatternRecognizer):
 
 
 class HomeAddressRecognizer(PatchPatternRecognizer):
-    """家庭地址识别器"""
-    PATTERN = r'(?<=(家庭地址|家庭住址|住宅地址)[:：\s]*)[^\n，。；！？]{5,40}'
+    """家庭地址识别器（增强版）"""
+    # 扩展模式：添加"家住"关键词，增强空格处理
+    PATTERN = r'(?<=(家庭地址|家庭住址|住宅地址|家住|家在)[:：\s]*)[^\n，。；！？]{5,60}'
 
     PATTERNS = [
         Pattern(
             "HOME_ADDRESS",
             PATTERN,
-            0.8,
+            0.85,  # 提高置信度
         ),
     ]
 
-    CONTEXT = ["家庭地址", "家庭住址", "住宅地址"]
+    # 扩展上下文关键词
+    CONTEXT = ["家庭地址", "家庭住址", "住宅地址", "家住", "家在"]
 
     def __init__(
       self,
@@ -376,17 +378,85 @@ class HomeAddressRecognizer(PatchPatternRecognizer):
             context=context,
             supported_language=supported_language,
         )
+        logger.debug(f"初始化家庭地址识别器（增强版），支持模式: {self.PATTERNS[0].regex}")
 
     def validate_result(self, pattern_text: str) -> bool:
-        """验证家庭地址是否合理"""
-        return bool(re.search(r'(区|街道|路|号|院|楼|栋|单元|小区|花园|别墅|新村|家园)', pattern_text))
+        """增强家庭地址验证逻辑"""
+        # 1. 检查地址特征词（扩展版）
+        address_features = [
+            "区", "街道", "路", "号", "院", "楼", "栋", "单元",
+            "小区", "花园", "别墅", "新村", "家园", "大厦", "公寓"
+        ]
+        if any(feature in pattern_text for feature in address_features):
+            return True
+
+        # 2. 检查行政区划结构
+        if re.search(r'(省|市|区|县|镇|乡|村).+', pattern_text):
+            return True
+
+        # 3. 检查地址格式（包含数字+单位）
+        if re.search(r'\d+[号幢栋单元室层]', pattern_text):
+            return True
+
+        return False
+
+    def analyze(
+      self,
+      text: str,
+      entities: List[str],
+      nlp_artifacts: NlpArtifacts = None,
+      regex_flags: int = None,
+    ) -> List[RecognizerResult]:
+        """重写分析方法，增强家庭地址识别"""
+        # 首先使用默认分析逻辑
+        results = super().analyze(text, entities, nlp_artifacts, regex_flags)
+
+        # 额外尝试匹配"家住"开头的地址
+        if not results:
+            return self._find_home_address_after_jiazhu(text)
+
+        return results
+
+    def _find_home_address_after_jiazhu(self, text: str) -> List[RecognizerResult]:
+        """查找'家住'后的家庭地址"""
+        results = []
+        # 查找"家住"后的地址
+        jiazhu_pattern = r'(家住|家在)[:：\s]*([^\n，。；！？]{5,60})'
+        matches = re.finditer(jiazhu_pattern, text)
+
+        for match in matches:
+            address_text = match.group(2)
+            start, end = match.span(2)
+
+            # 验证地址
+            if not self.validate_result(address_text):
+                continue
+
+            # 创建结果对象
+            description = self.build_regex_explanation(
+                self.name, "HomeAfterJiazhu", jiazhu_pattern, self.PATTERNS[0].score, True
+            )
+            result = RecognizerResult(
+                entity_type=self.supported_entities[0],
+                start=start,
+                end=end,
+                score=self.PATTERNS[0].score,
+                analysis_explanation=description,
+                recognition_metadata={
+                    RecognizerResult.RECOGNIZER_NAME_KEY: self.name,
+                    RecognizerResult.RECOGNIZER_IDENTIFIER_KEY: self.id,
+                },
+            )
+            results.append(result)
+
+        return results
 
 
 class CompanyNameRecognizer(PatchPatternRecognizer):
-    """公司名称识别器（增强版）"""
+    """公司名称识别器（增强后缀排除版）"""
 
-    # 增强匹配模式：支持"归XXX公司"等多种表达方式
-    COMPANY_NAME_PATTERN = r'(?<=(甲方|乙方|公司名称|单位名称|企业名称|机构名称|所属单位|归|所属公司)[:：\s为]*)[^:\n，。；！？]{4,60}(?=[\s\n。])'
+    # 修改模式：添加后缀排除机制
+    COMPANY_NAME_PATTERN = r'(?<=(甲方|乙方|公司名称|单位名称|企业名称|机构名称|所属单位|归|所属公司)[:：\s为]*)([^:\n，。；！？]{4,60}?)(?=(所有|保留|享有|拥有|归|的)?[\s\n。，；！？]|$)'
 
     PATTERNS = [
         Pattern(
@@ -396,11 +466,27 @@ class CompanyNameRecognizer(PatchPatternRecognizer):
         ),
     ]
 
-    # 扩展上下文关键词
+    # 保留原有上下文关键词
     CONTEXT = ["甲方", "乙方", "公司名称", "单位名称", "企业名称", "机构名称", "单位", "企业", "所属单位", "归", "所属公司"]
 
-    # 公司名称常见后缀（扩展版）
+    # 保留原有公司后缀
     COMPANY_SUFFIXES = ["公司", "有限公司", "股份公司", "集团", "分公司", "厂", "所", "中心", "事务所", "工作室", "分行", "支行", "分店"]
+
+    # 新增：个人字段排除词库
+    PERSONAL_KEYWORD_BLACKLIST = {
+        "姓名", "性别", "出生日期", "身份证号", "身份证", "户口", "户籍",
+        "住址", "地址", "电话", "手机", "号码", "邮箱", "电子邮箱", "邮件",
+        "民族", "婚姻", "政治面貌", "健康", "履历", "家庭", "成员", "关系"
+    }
+
+    # 新增：公司关键词白名单（增强验证）
+    COMPANY_KEYWORD_WHITELIST = {
+        "公司", "集团", "有限", "股份", "企业", "机构", "科技", "技术",
+        "服务", "咨询", "国际", "银行", "保险", "证券", "事务所", "分行"
+    }
+
+    # 新增：需要排除的后缀词
+    EXCLUDE_SUFFIXES = {"所有", "保留", "享有", "拥有", "归", "的"}
 
     def __init__(
       self,
@@ -417,28 +503,39 @@ class CompanyNameRecognizer(PatchPatternRecognizer):
             context=context,
             supported_language=supported_language,
         )
-        logger.debug(f"初始化公司名称识别器，支持模式: {self.PATTERNS[0].regex}")
+        logger.debug(f"初始化公司名称识别器（增强后缀排除版）")
 
     def validate_result(self, pattern_text: str) -> bool:
-        """增强公司名称验证"""
+        """增强验证逻辑：添加后缀排除机制"""
         logger.debug(f"验证公司名称: {pattern_text}")
 
-        # 1. 检查是否包含公司常见后缀
-        if any(suffix in pattern_text for suffix in self.COMPANY_SUFFIXES):
-            return True
+        # 1. 检查是否包含个人敏感词（黑名单）
+        if any(keyword in pattern_text for keyword in self.PERSONAL_KEYWORD_BLACKLIST):
+            logger.debug(f"排除包含个人敏感词: {pattern_text}")
+            return False
 
-        # 2. 检查是否包含公司特征词
-        company_keywords = ["企业", "机构", "集团", "事务所", "科技", "技术", "服务", "咨询", "国际", "银行", "保险", "证券"]
-        if any(keyword in pattern_text for keyword in company_keywords):
-            return True
+        # 2. 检查是否包含公司后缀或白名单关键词
+        has_suffix = any(suffix in pattern_text for suffix in self.COMPANY_SUFFIXES)
+        has_company_keyword = any(keyword in pattern_text for keyword in self.COMPANY_KEYWORD_WHITELIST)
 
-        # 3. 检查长度和格式（排除纯数字）
-        return len(pattern_text) >= 4 and not re.fullmatch(r'\d+', pattern_text)
+        if not (has_suffix or has_company_keyword):
+            logger.debug(f"不包含公司特征词: {pattern_text}")
+            return False
+
+        # 3. 检查是否以排除后缀结尾
+        if any(pattern_text.endswith(suffix) for suffix in self.EXCLUDE_SUFFIXES):
+            logger.debug(f"以排除后缀结尾: {pattern_text}")
+            return False
+
+        # 4. 保留原有长度和格式检查
+        valid_length_format = len(pattern_text) >= 4 and not re.fullmatch(r'\d+', pattern_text)
+
+        return valid_length_format
 
     def _analyze_patterns(
       self, text: str, flags: int = None
     ) -> List[RecognizerResult]:
-        """重写分析逻辑，增强公司名称识别"""
+        """重写分析逻辑，准确提取公司名称"""
         flags = flags if flags else re.DOTALL | re.MULTILINE
         results = []
         text = ''.join(['#', text, '#'])  # 添加边界符
@@ -447,17 +544,25 @@ class CompanyNameRecognizer(PatchPatternRecognizer):
             matches = re.finditer(pattern.regex, text, flags=flags)
 
             for match in matches:
-                start, end = match.span()
-                current_match = text[start:end]
+                # 获取匹配的公司名称部分（第二个捕获组）
+                company_text = match.group(2)
+                start = match.start(2)
+                end = match.end(2)
 
                 # 跳过空匹配
-                if current_match == "":
+                if not company_text:
+                    continue
+
+                # 新增：预过滤检查上下文
+                preceding_text = text[max(0, start - 20):start]
+                if any(keyword in preceding_text for keyword in self.PERSONAL_KEYWORD_BLACKLIST):
+                    logger.debug(f"跳过个人敏感词附近匹配: {company_text}")
                     continue
 
                 # 验证公司名称
-                validation_result = self.validate_result(current_match)
+                validation_result = self.validate_result(company_text)
                 if not validation_result:
-                    logger.debug(f"验证失败: {current_match}")
+                    logger.debug(f"验证失败: {company_text}")
                     continue
 
                 # 创建结果对象
@@ -480,56 +585,6 @@ class CompanyNameRecognizer(PatchPatternRecognizer):
                     results.append(pattern_result)
 
         return EntityRecognizer.remove_duplicates(results)
-
-    def analyze(
-      self,
-      text: str,
-      entities: List[str],
-      nlp_artifacts: NlpArtifacts = None,
-      regex_flags: int = None,
-    ) -> List[RecognizerResult]:
-        """重写分析方法，增强公司名称识别"""
-        results = super().analyze(text, entities, nlp_artifacts, regex_flags)
-
-        # 额外尝试匹配"归XXX公司"格式
-        if not results:
-            return self._find_company_after_gui(text)
-
-        return results
-
-    def _find_company_after_gui(self, text: str) -> List[RecognizerResult]:
-        """查找'归'字后的公司名称"""
-        results = []
-        # 查找"归"字后的公司名称
-        gui_pattern = r'(归|属于|隶属于)\s*([^。\n]{4,60}?)(公司|集团|厂|所|中心|事务所|分行|支行|分店)'
-        matches = re.finditer(gui_pattern, text)
-
-        for match in matches:
-            company_text = match.group(2) + match.group(3)  # 组合公司名称
-            start, end = match.span(2)  # 从公司名称部分开始
-
-            # 验证公司名称
-            if not self.validate_result(company_text):
-                continue
-
-            # 创建结果对象
-            description = self.build_regex_explanation(
-                self.name, "CompanyAfterGui", gui_pattern, self.PATTERNS[0].score, True
-            )
-            result = RecognizerResult(
-                entity_type=self.supported_entities[0],
-                start=start,
-                end=end + len(match.group(3)),  # 包含后缀
-                score=self.PATTERNS[0].score,
-                analysis_explanation=description,
-                recognition_metadata={
-                    RecognizerResult.RECOGNIZER_NAME_KEY: self.name,
-                    RecognizerResult.RECOGNIZER_IDENTIFIER_KEY: self.id,
-                },
-            )
-            results.append(result)
-
-        return results
 
 
 class CompanyAddressRecognizer(PatchPatternRecognizer):
@@ -814,3 +869,175 @@ class SalaryAmountRecognizer(PatternRecognizer):
                 results.append(result)
 
         return EntityRecognizer.remove_duplicates(results)
+
+
+class BankCardRecognizer(PatchPatternRecognizer):
+    """银行卡号识别器（修复版）"""
+
+    # 匹配模式：支持多种格式的银行卡号
+    BANK_CARD_PATTERN = r'(?<=(银行卡|储蓄卡|信用卡|借记卡|工资卡|卡号|账号|账户)[:：\s]*)[0-9\s\-]{14,22}'
+
+    # 中国主要银行的BIN号前缀（部分）
+    BANK_BIN_PREFIXES = {
+        # 中国银行
+        "中国银行": ["6227", "4563", "6216", "6217", "6259"],
+        # 工商银行
+        "工商银行": ["6222", "6212", "6217", "6258", "6259"],
+        # 建设银行
+        "建设银行": ["6227", "6217", "6259", "4367", "5240"],
+        # 农业银行
+        "农业银行": ["6228", "6229", "6213", "6216", "6259"],
+        # 交通银行
+        "交通银行": ["6222", "6213", "6217", "6259", "4581"],
+        # 招商银行
+        "招商银行": ["6225", "6226", "6214", "6217", "6259"],
+        # 邮政储蓄
+        "邮政储蓄": ["6221", "6210", "6217", "6259", "6222"],
+        # 民生银行
+        "民生银行": ["6226", "4213", "6217", "6259", "6222"],
+        # 光大银行
+        "光大银行": ["6226", "6227", "6217", "6259", "6222"],
+        # 中信银行
+        "中信银行": ["6226", "6227", "6217", "6259", "6222"],
+        # 平安银行
+        "平安银行": ["6221", "6222", "6217", "6259", "6222"],
+        # 浦发银行
+        "浦发银行": ["6225", "6226", "6217", "6259", "6222"],
+        # 广发银行
+        "广发银行": ["6225", "6226", "6217", "6259", "6222"],
+        # 华夏银行
+        "华夏银行": ["6226", "6227", "6217", "6259", "6222"],
+        # 兴业银行
+        "兴业银行": ["6229", "6227", "6217", "6259", "6222"],
+    }
+
+    PATTERNS = [
+        Pattern(
+            "BANK_CARD",
+            BANK_CARD_PATTERN,
+            0.9,
+        ),
+    ]
+
+    CONTEXT = ["银行卡", "储蓄卡", "信用卡", "借记卡", "工资卡", "卡号", "账号", "账户"]
+
+    def __init__(
+      self,
+      patterns: Optional[List[Pattern]] = None,
+      context: Optional[List[str]] = None,
+      supported_language: str = "zh",
+      supported_entity: str = "BANK_CARD",
+    ):
+        patterns = patterns if patterns else self.PATTERNS
+        context = context if context else self.CONTEXT
+        super().__init__(
+            supported_entity=supported_entity,
+            patterns=patterns,
+            context=context,
+            supported_language=supported_language,
+        )
+        logger.debug(f"初始化银行卡号识别器，支持模式: {self.PATTERNS[0].regex}")
+
+    def validate_result(self, pattern_text: str) -> bool:
+        """验证银行卡号格式是否合法"""
+        # 1. 清理文本：移除空格和连字符
+        clean_text = re.sub(r'[\s\-]', '', pattern_text)
+
+        # 2. 检查长度（中国银行卡号通常为16-19位）
+        if not (16 <= len(clean_text) <= 19):
+            logger.debug(f"银行卡号长度无效: {clean_text} ({len(clean_text)}位)")
+            return False
+
+        # 3. 检查是否为纯数字
+        if not clean_text.isdigit():
+            logger.debug(f"银行卡号包含非数字字符: {clean_text}")
+            return False
+
+        # 4. 检查BIN前缀（银行标识号）
+        bin_valid = False
+        matched_bank = None
+        matched_prefix = None
+
+        for bank, prefixes in self.BANK_BIN_PREFIXES.items():
+            for prefix in prefixes:
+                if clean_text.startswith(prefix):
+                    bin_valid = True
+                    matched_bank = bank
+                    matched_prefix = prefix
+                    logger.debug(f"匹配到{matched_bank}的BIN前缀: {matched_prefix}")
+                    break
+            if bin_valid:
+                break
+
+        # 5. Luhn算法验证（校验位检查）
+        if not self.luhn_check(clean_text):
+            logger.debug(f"银行卡号校验失败(Luhn算法): {clean_text}")
+            return False
+
+        return True
+
+    def luhn_check(self, card_number: str) -> bool:
+        """使用Luhn算法验证银行卡号"""
+        total = 0
+        reverse_digits = card_number[::-1]
+
+        for i, digit in enumerate(reverse_digits):
+            n = int(digit)
+            if i % 2 == 1:  # 从右向左，偶数位（索引从0开始）
+                n *= 2
+                if n > 9:
+                    n = (n % 10) + 1  # 或者 n - 9
+            total += n
+
+        return total % 10 == 0
+
+    def analyze(
+      self,
+      text: str,
+      entities: List[str],
+      nlp_artifacts: NlpArtifacts = None,
+      regex_flags: int = None,
+    ) -> List[RecognizerResult]:
+        """重写分析方法，增强银行卡号识别"""
+        # 首先使用默认分析逻辑
+        results = super().analyze(text, entities, nlp_artifacts, regex_flags)
+
+        # 额外尝试匹配表格格式的银行卡号
+        if not results:
+            return self._find_table_format_cards(text)
+
+        return results
+
+    def _find_table_format_cards(self, text: str) -> List[RecognizerResult]:
+        """查找表格格式的银行卡号"""
+        results = []
+        # 查找"工资卡卡号"后的银行卡号
+        table_pattern = r'(工资卡卡号|银行卡号|卡号)[:：\s]*([0-9\s\-]{14,22})'
+        matches = re.finditer(table_pattern, text)
+
+        for match in matches:
+            card_text = match.group(2)
+            start, end = match.span(2)
+
+            # 验证银行卡号
+            if not self.validate_result(card_text):
+                continue
+
+            # 创建结果对象
+            description = self.build_regex_explanation(
+                self.name, "TableBankCard", table_pattern, self.PATTERNS[0].score, True
+            )
+            result = RecognizerResult(
+                entity_type=self.supported_entities[0],
+                start=start,
+                end=end,
+                score=self.PATTERNS[0].score,
+                analysis_explanation=description,
+                recognition_metadata={
+                    RecognizerResult.RECOGNIZER_NAME_KEY: self.name,
+                    RecognizerResult.RECOGNIZER_IDENTIFIER_KEY: self.id,
+                },
+            )
+            results.append(result)
+
+        return results
